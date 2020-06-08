@@ -23,8 +23,6 @@ impl LPFilter {
     }
 }
 
-
-
 struct HPFilter {
     prev_sample: f32,
     prev_output: f32,
@@ -78,7 +76,6 @@ impl AllPass {
     }
 }
 
-
 pub fn sample_to_f32(sample: i16) -> f32 {
     sample as f32 / std::i16::MAX as f32
 }
@@ -108,8 +105,6 @@ impl Osc {
         self.cos -= self.sin * dt;
     }
 }
-
-
 
 struct DelayLine {
     mem: Vec<f32>,
@@ -178,4 +173,91 @@ impl DelayLine {
     }
 }
 
+#[derive(Default)]
+struct Svf {
+    sr: f32,
+    fc: f32,
+    res: f32,
+    drive: f32,
+    freq: f32,
+    damp: f32,
+    notch: f32,
+    low: f32,
+    high: f32,
+    band: f32,
+    peak: f32,
+    input: f32,
+    outnotch: f32,
+    outlow: f32,
+    outhigh: f32,
+    outpeak: f32,
+    outband: f32,
+}
 
+impl Svf {
+    fn new(samplerate: f32, freq: f32, res: f32) -> Self {
+        let mut s = Svf::default();
+        s.sr = samplerate;
+        s.set_freq(freq);
+        s.set_res(res);
+        s
+    }
+
+    pub fn process(&mut self, input: f32) {
+        self.input = input;
+        // first pass
+        self.notch = self.input - self.damp * self.band;
+        self.low = self.low + self.freq * self.band;
+        self.high = self.notch - self.low;
+        self.band =
+            self.freq * self.high + self.band - self.drive * self.band * self.band * self.band;
+        self.outlow = 0.5 * self.low;
+        self.outhigh = 0.5 * self.high;
+        self.outband = 0.5 * self.band;
+        self.outpeak = 0.5 * (self.low - self.high);
+        self.outnotch = 0.5 * self.notch;
+        // second pass
+        self.notch = self.input - self.damp * self.band;
+        self.low = self.low + self.freq * self.band;
+        self.high = self.notch - self.low;
+        self.band =
+            self.freq * self.high + self.band - self.drive * self.band * self.band * self.band;
+        self.outlow += 0.5 * self.low;
+        self.outhigh += 0.5 * self.high;
+        self.outband += 0.5 * self.band;
+        self.outpeak += 0.5 * (self.low - self.high);
+        self.outnotch += 0.5 * self.notch;
+    }
+
+    fn set_freq(&mut self, freq: f32) {
+        if freq < 0.000001 {
+            self.fc = 0.000001;
+        } else if freq > self.sr / 2.0 {
+            self.fc = (self.sr / 2.0) - 1.0;
+        } else {
+            self.fc = freq;
+        }
+        // Set Internal Frequency for self.fc
+        self.freq = 2.0 * (std::f32::consts::PI * (self.fc / (self.sr * 2.0)).min(0.25)).sin(); // fs*2 because double sampled
+                                                                                                // recalculate damp
+                                                                                                //damp = (MIN(2.0f * powf(self.res, 0.25f), MIN(2.0f, 2.0f / freq - freq * 0.5f)));
+        self.set_damp();
+    }
+
+    fn set_res(&mut self, mut r: f32) {
+        if r < 0.0 {
+            r = 0.0;
+        } else if r > 1.0 {
+            r = 1.0;
+        }
+        self.res = r;
+        // recalculate damp
+        //damp = (MIN(2.0f * powf(self.res, 0.25f), MIN(2.0f, 2.0f / freq - freq * 0.5f)));
+        self.set_damp();
+    }
+
+    fn set_damp(&mut self) {
+        self.damp =
+            (2.0 * (1.0 - self.res.powf(0.25))).min((2.0 / self.freq - self.freq * 0.5).min(2.0));
+    }
+}
